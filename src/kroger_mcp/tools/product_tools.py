@@ -2,7 +2,8 @@
 Product search and management tools for Kroger MCP server
 """
 
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
+from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 from fastmcp import Context
 from fastmcp.utilities.types import Image
@@ -19,6 +20,7 @@ from kroger_api.errors import (
 )
 
 from ..errors import KrogerToolError, translate_errors
+from .nutrition import NUTRIENT_KEYS, dietary_info, nutrition_facts
 from .params import Brand, Fulfillment, OptionalLocationId, ProductId, ProductLimit, SearchTerm
 from .shared import (
     get_client_credentials_client, 
@@ -31,6 +33,12 @@ from .shared import (
 
 # Seconds to wait for a product image download
 IMAGE_TIMEOUT = 30
+
+# Product pages are under this site; the Products API gives only their paths
+KROGER_SITE = "https://www.kroger.com"
+
+# Product IDs per Products API request when looking up product summaries
+_LOOKUP_BATCH = 50
 
 # Errors that concern one search of a bulk search, so the other searches still
 # run. Any other error, such as a rate limit, rejected credentials, or a
@@ -191,6 +199,67 @@ def _format_product(product: Dict[str, Any], all_image_sizes: bool = False) -> D
     _add_extended_attributes(formatted, product)
 
     return formatted
+
+
+def product_summary(product: Dict[str, Any]) -> Dict[str, Any]:
+    """The few fields of a raw product that identify it in a cart or draft
+
+    The price is the store's price at the time of the lookup: the
+    sale_price is set only while the product is on sale.
+    """
+    formatted = _format_product(product)
+    item = formatted.get("item") or {}
+    pricing = formatted.get("pricing") or {}
+    # productPageURI is a path with a tracking query, for example
+    # /p/fred-meyer-2-reduced-fat-milk-gallon/0001111041550?cid=...
+    page = product.get("productPageURI")
+    return {
+        "description": formatted.get("description"),
+        "brand": formatted.get("brand"),
+        "size": item.get("size"),
+        "sold_by": item.get("sold_by"),
+        "regular_price": pricing.get("regular_price"),
+        "sale_price": pricing.get("sale_price") if pricing.get("on_sale") else None,
+        "product_url": f"{KROGER_SITE}{urlsplit(page).path}" if isinstance(page, str) and page.startswith("/") else None,
+        "nutrition": nutrition_facts(product),
+        **dietary_info(product),
+    }
+
+
+def lookup_product_summaries(
+    product_ids: List[str], location_id: Optional[str]
+) -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
+    """Look up the product_summary of each product, as far as possible
+
+    The lookup only adds detail to a cart or draft record, so it never
+    raises: a failure is returned as a warning, and the products it could
+    not look up are missing from the summaries.
+
+    Args:
+        product_ids: The products, in any order; duplicates are ignored
+        location_id: The store whose prices to use, or None for no prices
+
+    Returns:
+        The summaries by product ID, and a warning if any product is missing
+    """
+    ids = list(dict.fromkeys(product_ids))
+    summaries: Dict[str, Dict[str, Any]] = {}
+    try:
+        client = get_client_credentials_client()
+        for start in range(0, len(ids), _LOOKUP_BATCH):
+            chunk = ids[start:start + _LOOKUP_BATCH]
+            response = client.product.search_products(product_id=",".join(chunk), location_id=location_id)
+            for product in (response or {}).get("data") or []:
+                if isinstance(product, dict) and product.get("productId") in chunk:
+                    summaries[product["productId"]] = product_summary(product)
+    except Exception as e:
+        reason = e.message.splitlines()[0] if isinstance(e, (KrogerAPIError, KrogerToolError)) else f"{type(e).__name__}: {e}"
+        missing = [i for i in ids if i not in summaries]
+        return summaries, f"Product details could not be looked up for {', '.join(missing)}: {reason}"
+    missing = [i for i in ids if i not in summaries]
+    if missing:
+        return summaries, f"Kroger has no product details for {', '.join(missing)}."
+    return summaries, None
 
 
 def _search_results(response: Optional[Dict[str, Any]], result: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -554,4 +623,134 @@ def register_tools(mcp):
             result["message"] = f"No products found with ID '{product_id}'"
         
         log_to_client(ctx, f"Found {result['count']} products with ID '{product_id}'")
+        return result
+
+    @mcp.tool()
+    @translate_errors
+    def compare_products(
+        search_term: Annotated[Optional[str], Field(
+            min_length=validation.PRODUCT_TERM_MIN_LENGTH,
+            description="Compare the products this search finds, for example 'sourdough bread'. Give this or product_ids.",
+        )] = None,
+        product_ids: Annotated[Optional[List[ProductId]], Field(
+            min_length=1, max_length=50, description="Compare these products. Give this or search_term.",
+        )] = None,
+        sort_by: Annotated[Optional[Literal[NUTRIENT_KEYS]], Field(
+            description="Sort by this nutrient, lowest first unless descending is true",
+        )] = None,
+        descending: bool = False,
+        basis: Annotated[Literal["per_100", "per_serving"], Field(description=(
+            "Compare per 100 g or 100 ml (default; fair across serving sizes) or per serving as labeled"
+        ))] = "per_100",
+        include_ingredients: Annotated[bool, Field(description="Include each ingredient statement")] = False,
+        limit: ProductLimit = 20,
+        location_id: OptionalLocationId = None,
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Compare the nutrition facts of products side by side, for questions such as "which
+        sourdough bread has the least sodium" or "which of these is lowest in sugar".
+
+        Nutrients are in fixed units: calories in kcal, and the rest in g or mg as their names say.
+        Per 100 g / 100 ml values are fair across serving sizes; a product whose serving size is not
+        in a unit of weight or volume has no per_100 values. Values the label does not give are
+        listed in unknown and sorted last. Unknown is not zero: never say a product is low in a
+        nutrient its label does not report.
+
+        For kidney-friendly (CKD) questions, compare sodium_mg, potassium_mg, phosphorus_mg, and
+        protein_g, and check phosphate_additives and potassium_additives. Labels rarely report
+        phosphorus, and phosphate additives are absorbed more fully than natural phosphorus, so the
+        additives are often the best phosphorus signal. Potassium chloride (a salt substitute) can add
+        a lot of potassium; preservatives such as potassium sorbate are used in small amounts. Present
+        the facts and the tradeoffs, and
+        defer to the user's own targets from their care team rather than giving medical advice.
+
+        Args:
+            search_term: Search for the products to compare (3+ characters, at most 8 words)
+            product_ids: Or the product IDs to compare (1-50)
+            sort_by: The nutrient to sort by, for example sodium_mg
+            descending: Sort highest first
+            basis: per_100 (default) or per_serving
+            include_ingredients: Include ingredient statements
+            limit: Products to search for (1-50, default 20); ignored with product_ids
+            location_id: Store for prices (uses the preferred location if not provided)
+
+        Returns:
+            The products in order, with their nutrition on the chosen basis, and the products
+            without nutrition facts
+        """
+        if (search_term is None) == (product_ids is None):
+            raise KrogerToolError(
+                "invalid_parameter",
+                "Give either search_term or product_ids, not both and not neither.",
+                next_step="Call compare_products again with one of them.",
+                details={"param": "search_term"},
+            )
+        if search_term is not None:
+            validation.search_term(search_term, param="search_term")
+        location_id = resolve_location_id(location_id)
+        client = get_client_credentials_client()
+        if search_term is not None:
+            log_to_client(ctx, f"Comparing '{search_term}' at location {location_id}")
+            response = client.product.search_products(term=search_term, location_id=location_id, limit=limit)
+        else:
+            log_to_client(ctx, f"Comparing {len(product_ids)} products at location {location_id}")
+            response = client.product.search_products(product_id=",".join(product_ids), location_id=location_id)
+        products = [p for p in (response or {}).get("data") or [] if isinstance(p, dict)]
+        if not products:
+            _check_location_exists(client, location_id)
+
+        rows, without = [], []
+        for product in products:
+            summary = product_summary(product)
+            nutrition = summary.pop("nutrition")
+            if not nutrition:
+                without.append({"product_id": product.get("productId"), "description": summary["description"]})
+                continue
+            row = {"product_id": product.get("productId"), **summary, "serving": nutrition["serving"]}
+            row.pop("product_url")
+            values = nutrition["per_100"] if basis == "per_100" else nutrition["per_serving"]
+            row["nutrition"] = values
+            row["unknown"] = nutrition["unknown"]
+            for key in ("phosphate_additives", "potassium_additives"):
+                if nutrition[key]:
+                    row[key] = nutrition[key]
+            if include_ingredients:
+                row["ingredients"] = nutrition["ingredients"]
+            rows.append(row)
+
+        def sort_value(row):
+            return (row["nutrition"] or {}).get(sort_by) if sort_by else None
+
+        not_comparable = []
+        if sort_by:
+            known = [r for r in rows if sort_value(r) is not None]
+            not_comparable = [r["product_id"] for r in rows if sort_value(r) is None]
+            known.sort(key=sort_value, reverse=descending)
+            rows = known + [r for r in rows if sort_value(r) is None]
+
+        notes = ["Unknown values are not zero; check unknown before ranking a product as low in a nutrient."]
+        bases = {(r["nutrition"] or {}).get("basis") for r in rows if basis == "per_100"} - {None}
+        if len(bases) > 1:
+            notes.append("Some products are per 100 g and others per 100 ml, which are not directly comparable.")
+        if basis == "per_100" and any(r["nutrition"] is None for r in rows):
+            notes.append("Products with nutrition null have a serving size that is not a weight or volume; "
+                         "call again with basis per_serving to see their label values.")
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "location_id": location_id,
+            "basis": basis,
+            "sort_by": sort_by,
+            "descending": descending,
+            "count": len(rows),
+            "products": rows,
+            "note": " ".join(notes),
+        }
+        if not_comparable:
+            result["not_comparable"] = not_comparable
+        if without:
+            result["without_nutrition_facts"] = without
+        if not products:
+            result["message"] = "No products found."
         return result

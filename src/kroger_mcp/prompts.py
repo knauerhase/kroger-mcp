@@ -90,8 +90,9 @@ For each store, please show the full address, distance, and any special features
 1. Search the web for a good {recipe_type} recipe
 2. Present the recipe with ingredients and instructions
 3. Look up each ingredient in my local Kroger store
-4. Add all the ingredients I'll need to my cart using bulk_add_to_cart
+4. Put all the ingredients I'll need in the draft cart using add_to_draft
 5. If any ingredients aren't available, suggest alternatives
+6. Show me the draft with view_draft so I can review it
 
-Before adding items to cart, please ask me if I prefer pickup or delivery for these items.
+Before sending the draft to my cart with send_draft_to_cart, ask me if I prefer pickup or delivery and wait for my approval.
 """

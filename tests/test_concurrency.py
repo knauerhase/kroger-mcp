@@ -175,7 +175,7 @@ async def test_a_log_message_that_cannot_be_sent_never_fails_the_tool(mcp, reque
 async def test_every_tool_that_does_io_runs_in_a_worker_thread():
     """FastMCP runs a sync tool in a worker thread and an async one on the event loop"""
     tools = await create_server().list_tools()
-    assert len(tools) == 31
+    assert len(tools) == 38
     # get_current_datetime makes no request and reads no file
     assert [t.name for t in tools if inspect.iscoroutinefunction(t.fn)] == ["get_current_datetime"]
 

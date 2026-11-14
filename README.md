@@ -185,18 +185,34 @@ fastmcp dev server.py --with-editable .
 | `get_product_details` | Get detailed product information including pricing | No |
 | `search_products_by_id` | Find products by their specific product ID | No |
 | `get_product_images` | Get product images from specific perspective (front, back, etc.) | No |
+| `compare_products` | Compare nutrition facts side by side, per 100 g/ml or per serving, sorted by a nutrient (for example `sodium_mg`), with phosphate and potassium additives flagged | No |
 
 #### Cart Tools
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
-| `add_items_to_cart` | Add a single item to cart | Yes |
-| `bulk_add_to_cart` | Add multiple items to cart in one operation | Yes |
+| `add_items_to_cart` | Add a single item to cart right away (prefer the draft) | Yes |
+| `bulk_add_to_cart` | Add multiple items to cart right away (prefer the draft) | Yes |
 | `view_current_cart` | View items currently in your local cart tracking | No |
 | `remove_from_cart` | Remove items from local cart tracking | No |
 | `clear_current_cart` | Clear all items from local cart tracking | No |
 | `mark_order_placed` | Move current cart to order history | No |
 | `view_order_history` | View history of placed orders | No |
+
+#### Draft Cart Tools
+
+The Kroger cart is add-only: the API cannot remove items, lower quantities (it refuses a quantity of 0 or less with `CART-2012`), or read the cart, and adding a product that is already in the cart raises its quantity. So items go into a local draft first, where they can be changed freely, and are sent to Kroger in one request once the user approves.
+
+| Tool | Description | Auth Required |
+|------|-------------|---------------|
+| `add_to_draft` | Add items to the draft, with their name, size, price at the preferred store, nutrition facts, allergens, and dietary claims | No |
+| `view_draft` | Show the draft, an estimated total, and items already sent to the cart | No |
+| `update_draft_item` | Set an item's quantity (0 removes it) or change its modality | No |
+| `remove_from_draft` | Remove an item from the draft | No |
+| `clear_draft` | Empty the draft | No |
+| `send_draft_to_cart` | Add the whole draft to the Kroger cart in one request, then empty it | Yes |
+
+`send_draft_to_cart` refuses with `quantity_would_increase` when a draft item was already sent to the cart, unless `allow_quantity_increase` is true.
 
 #### Information Tools
 
@@ -232,8 +248,12 @@ Since the Kroger API doesn't provide cart viewing functionality, this server mai
 
 #### Local Cart Storage
 - **File**: `kroger_cart.json`
-- **Contents**: Current cart items with timestamps
+- **Contents**: Current cart items with timestamps, and each product's name, size, price, and page URL
 - **Automatic**: Created and updated automatically
+
+#### Draft Cart
+- **File**: `kroger_draft.json`
+- **Contents**: Items waiting for the user's approval, with product details
 
 #### Order History
 - **File**: `kroger_order_history.json`

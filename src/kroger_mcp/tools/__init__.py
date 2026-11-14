@@ -5,6 +5,7 @@ This package contains all the tool modules organized by functionality:
 - location_tools: Store location search and management
 - product_tools: Product search and details
 - cart_tools: Shopping cart management with local tracking
+- draft_tools: Draft cart the user reviews before items are sent to Kroger
 - info_tools: Chain and department information
 - profile_tools: User profile and sign-in status
 - auth_tools: OAuth sign-in (start_authentication, complete_authentication)

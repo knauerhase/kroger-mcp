@@ -24,6 +24,7 @@ from kroger_api.utils.env import load_env_file
 from .tools import location_tools
 from .tools import product_tools
 from .tools import cart_tools
+from .tools import draft_tools
 from .tools import info_tools
 from .tools import profile_tools
 from .tools import utility_tools
@@ -48,17 +49,23 @@ def create_server() -> FastMCP:
         Key Features:
         - Search and manage store locations
         - Find and search products
-        - Add items to shopping cart with local tracking
+        - Collect items in a draft cart the user reviews, then send them to the Kroger cart
         - Access chain and department information
         - User profile management
         
+        The Kroger cart is add-only: the Kroger API cannot remove items, lower quantities, or read
+        the cart, and adding a product already in the cart raises its quantity. Only the user can
+        undo an add, in the Kroger app or website. So collect items in the draft first.
+        
         Common workflows:
         1. Set a preferred location with set_preferred_location
-        2. Search for products with search_products
-        3. Add items to cart with add_items_to_cart
-        4. Use bulk_add_to_cart for multiple items at once
-        5. View current cart with view_current_cart
-        6. Mark order as placed with mark_order_placed
+        2. Search for products with search_products or bulk_search_products
+        3. Put the chosen products in the draft with add_to_draft
+        4. Show the user the draft with view_draft, and change it with update_draft_item or remove_from_draft
+        5. Once the user approves, send it with send_draft_to_cart
+        6. View what was sent with view_current_cart
+        7. Mark order as placed with mark_order_placed
+        Use add_items_to_cart or bulk_add_to_cart only when the user asks to add items right away.
         
         Authentication Flow:
         1. Use start_authentication to get an authorization URL
@@ -67,7 +74,7 @@ def create_server() -> FastMCP:
         4. Use complete_authentication with the redirect URL to finish the process
         
         Cart Tracking:
-        This server maintains a local record of items added to your cart since the Kroger API
+        This server keeps a local record of the items it sent to the cart, since the Kroger API
         doesn't provide cart viewing functionality. When you place an order through the Kroger
         website/app, use mark_order_placed to move the current cart to order history.
         
@@ -88,6 +95,7 @@ def create_server() -> FastMCP:
     location_tools.register_tools(mcp)
     product_tools.register_tools(mcp)
     cart_tools.register_tools(mcp)
+    draft_tools.register_tools(mcp)
     info_tools.register_tools(mcp)
     profile_tools.register_tools(mcp)
     utility_tools.register_tools(mcp)

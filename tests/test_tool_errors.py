@@ -492,6 +492,6 @@ async def test_middleware_handles_a_tool_without_translate_errors(requests_mock)
 
 async def test_every_tool_translates_errors():
     tools = await create_server().list_tools()
-    assert len(tools) == 31
+    assert len(tools) == 38
     for tool in tools:
         assert hasattr(tool.fn, "__wrapped__"), f"{tool.name} is missing @translate_errors"

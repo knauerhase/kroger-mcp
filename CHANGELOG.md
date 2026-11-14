@@ -5,6 +5,21 @@ All notable changes to the `kroger-mcp` package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Draft cart**: `add_to_draft`, `view_draft`, `update_draft_item`, `remove_from_draft`, `clear_draft`, and `send_draft_to_cart`. The Kroger Public API cannot remove items or lower quantities (a quantity of 0 or less is refused with `CART-2012`, checked live), and adding a product already in the cart raises its quantity, so a mistaken add can only be undone by the user in the Kroger app. Items now go into a local draft (`kroger_draft.json`) that can be changed freely, and `send_draft_to_cart` adds the whole draft in one request after the user approves. It refuses with `quantity_would_increase` when a draft item was already sent, unless `allow_quantity_increase` is true. A send whose outcome is unknown keeps the draft and says to check the cart first.
+- The local cart tracking and the draft save each product's description, brand, size, `sold_by`, regular and sale price at the preferred store, and product page URL, looked up in one Products API request per 50 products. The lookup is best effort: when it fails, the add still succeeds and the result has a `details_warning`.
+- **`compare_products`** compares the nutrition facts of the products a search finds, or of given product IDs, for questions such as "which sourdough bread has the least sodium". Nutrients are converted to fixed units (kcal, g, mg) and given per 100 g or 100 ml (the default) or per serving, and can be sorted by any of 15 nutrients. A nutrient the label lists without a value, or does not list, is reported as unknown and sorted last, never treated as zero. Phosphate and potassium additives in the ingredient statement are flagged, because labels rarely report phosphorus, which matters for kidney (CKD) diets.
+- The product details saved in the draft and the local cart tracking include the nutrition facts in the same form, the allergens, and dietary claims such as Vegan, Kosher, or Organic.
+- `view_current_cart`, `view_draft`, and `send_draft_to_cart` include an estimated total, and `mark_order_placed` saves it with the order. Products sold by weight and products without a known price are listed separately.
+- `add_items_to_cart` and `bulk_add_to_cart` report `quantity_increased` when a product was already in the local cart tracking.
+
+### Changed
+
+- The server instructions, the `add_items_to_cart` and `bulk_add_to_cart` descriptions, and the `add_recipe_to_cart` prompt direct the assistant to the draft, and say that adds to the Kroger cart are permanent.
+
 ## [0.4.0] - 2026-10-22
 
 ### Changed

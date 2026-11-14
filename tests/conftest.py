@@ -6,7 +6,7 @@ from fastmcp import Client
 
 from kroger_api.token_storage import save_token
 from kroger_mcp.server import create_server
-from kroger_mcp.tools import auth_tools, shared
+from kroger_mcp.tools import auth_tools, cart_tools, shared
 
 BASE = "https://api.kroger.com"
 TOKEN_URL = f"{BASE}/v1/connect/oauth2/token"
@@ -35,6 +35,10 @@ def isolated(tmp_path, monkeypatch, requests_mock):
     monkeypatch.setattr(shared, "_client_credentials_client", None)
     monkeypatch.setattr(auth_tools, "_pkce_params", None)
     monkeypatch.setattr(auth_tools, "_auth_state", None)
+    # The cart and draft tools look up product details for their records with
+    # extra Products API requests. Tests that count requests would see them, so
+    # the lookup finds nothing unless a test replaces it (see test_draft.py).
+    monkeypatch.setattr(cart_tools, "lookup_product_summaries", lambda product_ids, location_id: ({}, None))
     return data_dir
 
 
